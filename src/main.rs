@@ -12,7 +12,7 @@ use structopt::StructOpt;
 
 use crate::cli::CliArgs;
 use crate::command_is_executing::CommandIsExecuting;
-use crate::common::input::{config::Config, options::Options};
+use crate::common::input::config::Config;
 use crate::os_input_output::{get_client_os_input, get_server_os_input};
 use crate::utils::{
     consts::{ZELLIJ_TMP_DIR, ZELLIJ_TMP_LOG_DIR},
@@ -29,7 +29,6 @@ pub fn main() {
             std::process::exit(1);
         }
     };
-    let config_options = Options::from_cli(&config.options, opts.option.clone());
 
     if let Some(crate::cli::ConfigCli::GenerateCompletion { shell }) = opts.option {
         let shell = match shell.as_ref() {
@@ -53,7 +52,7 @@ pub fn main() {
         atomic_create_dir(&*ZELLIJ_TMP_LOG_DIR).unwrap();
         if let Some(path) = opts.server {
             let os_input = get_server_os_input();
-            start_server(Box::new(os_input), path, config_options);
+            start_server(Box::new(os_input), path);
         } else {
             let os_input = get_client_os_input();
             start_client(Box::new(os_input), opts, config);
