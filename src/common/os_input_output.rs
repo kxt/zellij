@@ -129,8 +129,6 @@ fn spawn_terminal(file_to_open: Option<PathBuf>, orig_termios: termios::Termios)
                 let pid_secondary = match fork_pty_res.fork_result {
                     ForkResult::Parent { child } => {
                         // fcntl(pid_primary, FcntlArg::F_SETFL(OFlag::empty())).expect("could not fcntl");
-                        fcntl(pid_primary, FcntlArg::F_SETFL(OFlag::O_NONBLOCK))
-                            .expect("could not fcntl");
                         child
                     }
                     ForkResult::Child => match file_to_open {

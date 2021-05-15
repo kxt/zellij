@@ -150,50 +150,36 @@ fn stream_terminal_bytes(
     task::spawn({
         async move {
             err_ctx.add_call(ContextType::AsyncTask);
-            let mut terminal_bytes = ReadFromPid::new(&pid, os_input);
 
-            let mut last_byte_receive_time: Option<Instant> = None;
-            let mut pending_render = false;
             let max_render_pause = Duration::from_millis(30);
 
-            while let Some(bytes) = terminal_bytes.next().await {
-                let bytes_is_empty = bytes.is_empty();
-                if debug {
-                    for byte in bytes.iter() {
-                        debug_to_file(*byte, pid).unwrap();
-                    }
+            use async_std::io::ReadExt;
+            use async_std::os::unix::io::FromRawFd;
+
+            let mut read_buffer = [0; 65535];
+            let mut pty = unsafe { async_std::fs::File::from_raw_fd(pid) };
+            while let Ok(n_bytes) = pty.read(&mut read_buffer).await {
+                senders
+                    .send_to_screen(ScreenInstruction::PtyBytes(
+                        pid,
+                        read_buffer[..n_bytes].to_vec(),
+                    ))
+                    .unwrap();
+                let deadline = Instant::now() + max_render_pause;
+                while let Ok(Ok(n_bytes)) = async_std::future::timeout(
+                    deadline.duration_since(Instant::now()),
+                    pty.read(&mut read_buffer),
+                )
+                .await
+                {
+                    senders
+                        .send_to_screen(ScreenInstruction::PtyBytes(
+                            pid,
+                            read_buffer[..n_bytes].to_vec(),
+                        ))
+                        .unwrap();
                 }
-                if !bytes_is_empty {
-                    let _ = senders.send_to_screen(ScreenInstruction::PtyBytes(pid, bytes));
-                    // for UX reasons, if we got something on the wire, we only send the render notice if:
-                    // 1. there aren't any more bytes on the wire afterwards
-                    // 2. a certain period (currently 30ms) has elapsed since the last render
-                    //    (otherwise if we get a large amount of data, the display would hang
-                    //    until it's done)
-                    // 3. the stream has ended, and so we render 1 last time
-                    match last_byte_receive_time.as_mut() {
-                        Some(receive_time) => {
-                            if receive_time.elapsed() > max_render_pause {
-                                pending_render = false;
-                                let _ = senders.send_to_screen(ScreenInstruction::Render);
-                                last_byte_receive_time = Some(Instant::now());
-                            } else {
-                                pending_render = true;
-                            }
-                        }
-                        None => {
-                            last_byte_receive_time = Some(Instant::now());
-                            pending_render = true;
-                        }
-                    };
-                } else {
-                    if pending_render {
-                        pending_render = false;
-                        let _ = senders.send_to_screen(ScreenInstruction::Render);
-                    }
-                    last_byte_receive_time = None;
-                    task::sleep(::std::time::Duration::from_millis(10)).await;
-                }
+                senders.send_to_screen(ScreenInstruction::Render).unwrap();
             }
             senders.send_to_screen(ScreenInstruction::Render).unwrap();
             #[cfg(not(test))]
