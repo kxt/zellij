@@ -2,10 +2,10 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use zellij_utils::{nix, zellij_tile};
+use zellij_utils::{crossbeam, nix, zellij_tile};
 
 use crate::tests::possible_tty_inputs::{get_possible_tty_inputs, Bytes};
 use crate::tests::utils::commands::{QUIT, SLEEP};
@@ -83,9 +83,9 @@ pub struct FakeInputOutput {
     possible_tty_inputs: HashMap<u16, Bytes>,
     last_snapshot_time: Arc<Mutex<Instant>>,
     send_instructions_to_client: SenderWithContext<ServerToClientMsg>,
-    receive_instructions_from_server: Arc<Mutex<mpsc::Receiver<(ServerToClientMsg, ErrorContext)>>>,
+    receive_instructions_from_server: Arc<Mutex<crossbeam::channel::Receiver<(ServerToClientMsg, ErrorContext)>>>,
     send_instructions_to_server: SenderWithContext<ClientToServerMsg>,
-    receive_instructions_from_client: Arc<Mutex<mpsc::Receiver<(ClientToServerMsg, ErrorContext)>>>,
+    receive_instructions_from_client: Arc<Mutex<crossbeam::channel::Receiver<(ClientToServerMsg, ErrorContext)>>>,
     should_trigger_sigwinch: Arc<(Mutex<bool>, Condvar)>,
     sigwinch_event: Option<PositionAndSize>,
 }
@@ -96,10 +96,10 @@ impl FakeInputOutput {
         let last_snapshot_time = Arc::new(Mutex::new(Instant::now()));
         let stdout_writer = FakeStdoutWriter::new(last_snapshot_time.clone());
         let (client_sender, client_receiver): ChannelWithContext<ServerToClientMsg> =
-            mpsc::channel();
+            crossbeam::channel::unbounded();
         let send_instructions_to_client = SenderWithContext::new(SenderType::Sender(client_sender));
         let (server_sender, server_receiver): ChannelWithContext<ClientToServerMsg> =
-            mpsc::channel();
+            crossbeam::channel::unbounded();
         let send_instructions_to_server = SenderWithContext::new(SenderType::Sender(server_sender));
         win_sizes.insert(0, winsize); // 0 is the current terminal
         FakeInputOutput {

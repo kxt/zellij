@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::os::unix::io::RawFd;
 use std::str;
+use zellij_utils::{crossbeam, errors::ErrorContext};
 
 use zellij_utils::zellij_tile;
 
@@ -126,6 +127,7 @@ impl From<&ScreenInstruction> for ScreenContext {
 pub(crate) struct Screen {
     /// A Bus for sending and receiving messages with the other threads.
     pub bus: Bus<ScreenInstruction>,
+    pty_receiver: crossbeam::channel::Receiver<(ScreenInstruction, ErrorContext)>,
     /// An optional maximal amount of panes allowed per [`Tab`] in this [`Screen`] instance.
     max_panes: Option<usize>,
     /// A map between this [`Screen`]'s tabs and their ID/key.
@@ -143,6 +145,7 @@ impl Screen {
     /// Creates and returns a new [`Screen`].
     pub fn new(
         bus: Bus<ScreenInstruction>,
+        pty_receiver: crossbeam::channel::Receiver<(ScreenInstruction, ErrorContext)>,
         client_attributes: &ClientAttributes,
         max_panes: Option<usize>,
         mode_info: ModeInfo,
@@ -150,6 +153,7 @@ impl Screen {
     ) -> Self {
         Screen {
             bus,
+            pty_receiver,
             max_panes,
             position_and_size: client_attributes.position_and_size,
             colors: client_attributes.palette,
@@ -387,6 +391,7 @@ impl Screen {
 #[allow(clippy::boxed_local)]
 pub(crate) fn screen_thread_main(
     bus: Bus<ScreenInstruction>,
+    pty_receiver: crossbeam::channel::Receiver<(ScreenInstruction, ErrorContext)>,
     max_panes: Option<usize>,
     client_attributes: ClientAttributes,
     config_options: Box<Options>,
@@ -395,6 +400,7 @@ pub(crate) fn screen_thread_main(
 
     let mut screen = Screen::new(
         bus,
+        pty_receiver.clone(),
         &client_attributes,
         max_panes,
         ModeInfo {
@@ -406,11 +412,15 @@ pub(crate) fn screen_thread_main(
         },
         InputMode::Normal,
     );
+    let mut sel = crossbeam::channel::Select::new();
+    let recvers = [pty_receiver, screen.bus.receiver.clone()];
+    for r in &recvers {
+        sel.recv(r);
+    }
     loop {
-        let (event, mut err_ctx) = screen
-            .bus
-            .recv()
-            .expect("failed to receive event on channel");
+        let oper = sel.select();
+        let r = &recvers[oper.index()];
+        let (event, mut err_ctx) = oper.recv(r).unwrap();
         err_ctx.add_call(ContextType::Screen((&event).into()));
         match event {
             ScreenInstruction::PtyBytes(pid, vte_bytes) => {

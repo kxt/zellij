@@ -10,6 +10,7 @@ pub mod setup;
 pub mod shared;
 
 pub use async_std;
+pub use crossbeam;
 pub use interprocess;
 pub use libc;
 pub use nix;

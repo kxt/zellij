@@ -13,7 +13,7 @@ use zellij_utils::zellij_tile;
 
 use std::sync::{Arc, RwLock};
 use std::thread;
-use std::{path::PathBuf, sync::mpsc};
+use std::path::PathBuf;
 use wasmer::Store;
 use zellij_tile::data::PluginCapabilities;
 
@@ -27,7 +27,8 @@ use crate::{
 };
 use route::route_thread_main;
 use zellij_utils::{
-    channels::{ChannelWithContext, SenderType, SenderWithContext, SyncChannelWithContext},
+    channels::{ChannelWithContext, SenderType, SenderWithContext},
+    crossbeam,
     cli::CliArgs,
     errors::{ContextType, ErrorInstruction, ServerContext},
     input::options::Options,
@@ -104,9 +105,9 @@ pub fn start_server(os_input: Box<dyn ServerOsApi>, socket_path: PathBuf) {
 
     std::env::set_var(&"ZELLIJ", "0");
 
-    let (to_server, server_receiver): SyncChannelWithContext<ServerInstruction> =
-        mpsc::sync_channel(50);
-    let to_server = SenderWithContext::new(SenderType::SyncSender(to_server));
+    let (to_server, server_receiver): ChannelWithContext<ServerInstruction> =
+        crossbeam::channel::bounded(50);
+    let to_server = SenderWithContext::new(SenderType::Sender(to_server));
     let sessions: Arc<RwLock<Option<SessionMetaData>>> = Arc::new(RwLock::new(None));
 
     #[cfg(not(any(feature = "test", test)))]
@@ -221,12 +222,15 @@ fn init_session(
     to_server: SenderWithContext<ServerInstruction>,
     client_attributes: ClientAttributes,
 ) -> SessionMetaData {
-    let (to_screen, screen_receiver): ChannelWithContext<ScreenInstruction> = mpsc::channel();
+    let (to_screen, screen_receiver): ChannelWithContext<ScreenInstruction> = crossbeam::channel::unbounded();
     let to_screen = SenderWithContext::new(SenderType::Sender(to_screen));
 
-    let (to_plugin, plugin_receiver): ChannelWithContext<PluginInstruction> = mpsc::channel();
+    let (to_screen_pty, screen_receiver_pty): ChannelWithContext<ScreenInstruction> = crossbeam::channel::bounded(100);
+    let to_screen_pty = SenderWithContext::new(SenderType::Sender(to_screen_pty));
+
+    let (to_plugin, plugin_receiver): ChannelWithContext<PluginInstruction> = crossbeam::channel::unbounded();
     let to_plugin = SenderWithContext::new(SenderType::Sender(to_plugin));
-    let (to_pty, pty_receiver): ChannelWithContext<PtyInstruction> = mpsc::channel();
+    let (to_pty, pty_receiver): ChannelWithContext<PtyInstruction> = crossbeam::channel::unbounded();
     let to_pty = SenderWithContext::new(SenderType::Sender(to_pty));
 
     // Determine and initialize the data directory
@@ -258,7 +262,7 @@ fn init_session(
             let pty = Pty::new(
                 Bus::new(
                     pty_receiver,
-                    Some(&to_screen),
+                    Some(&to_screen_pty),
                     None,
                     Some(&to_plugin),
                     Some(&to_server),
@@ -285,7 +289,7 @@ fn init_session(
             let max_panes = opts.max_panes;
 
             move || {
-                screen_thread_main(screen_bus, max_panes, client_attributes, config_options);
+                screen_thread_main(screen_bus, screen_receiver_pty, max_panes, client_attributes, config_options);
             }
         })
         .unwrap();
